@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+client/AEGIS.app/
+.DS_Store
+.idea/

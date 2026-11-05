@@ -112,8 +112,29 @@ def wait():
 # MEMBER 1 - Geffery Addai: messaging, team state, leader, drone scans
 # =============================================================================
 def send_status():
-    """(M1, #5) Broadcast STATUS {id, loc, energy, goal} and update my own team row."""
-    pass
+    """(M1, #5) Broadcast STATUS {id, loc, energy, goal} and update my own team row.
+
+    send_message() never delivers to the sender, so I write my own row in
+    state['team'] here; teammates' rows come from read_and_merge().
+    Sending is free, so this is called every round before the one action.
+    """
+    my_id = get_id()
+    loc = get_location()
+    energy = get_energy_level()
+    goal = follow_assign()  # None until the leader's first ASSIGN arrives
+
+    # keep my own row current (alive_ids()/team_snapshot() read this table)
+    state["team"][my_id] = {
+        "loc": loc,
+        "energy": energy,
+        "goal": goal,
+        "last_heard": state["round"],
+        "dead": False,
+    }
+
+    msg = {"t": "STATUS", "id": my_id, "loc": to_xy(loc),
+           "energy": energy, "goal": to_xy(goal)}
+    send_message(json.dumps(msg), [])  # [] = broadcast to every teammate
 
 
 def read_and_merge():

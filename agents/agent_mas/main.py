@@ -243,8 +243,23 @@ def team_snapshot():
 
 
 def am_i_leader():
-    """(M1, #8) Lowest living id leads; next lowest takes over if it dies."""
-    return get_id() == min(alive_ids())
+    """(M1, #8) Lowest living id leads; next lowest takes over if it dies.
+
+    Every agent runs this on the same team table, so all of them agree on the
+    leader with no election messages. When the leader changes (the old one
+    went silent), it is logged in state['leader'], and if I am the new leader
+    I set state['dirty'] so I send a fresh ASSIGN straight away.
+    Round 1 has no messages yet, so everyone sees only themselves as leader;
+    think() does not call assign() in round 1, so that is harmless.
+    """
+    leader = min(alive_ids())
+    if leader != state["leader"]:
+        if state["leader"] is not None:
+            log("leader change:", state["leader"], "->", leader)
+        state["leader"] = leader
+        if leader == get_id():
+            state["dirty"] = True
+    return leader == get_id()
 
 
 def update_stacks():

@@ -322,8 +322,64 @@ def update_stacks():
 
 def scan_if_needed():
     """(M1, #11) drone_scan an unknown, unclaimed goal stack if affordable.
-    Returns True if it used this round's action (drone_scan), else False."""
-    return False
+    Returns True if it used this round's action (drone_scan), else False.
+
+    Who scans what is worked out locally, with no claim messages: the goals
+    to scan (sorted by x, y) are paired with the living ids (sorted), so goal
+    i goes to agent i. Every agent has the same team table and stacks, so they
+    all compute the same pairing and each goal is scanned once.
+    - A goal I scanned stays in the list for 2 more rounds (my SCAN reaches
+      the team 2 rounds after the scan), so the pairing does not shift for me
+      before the others have it.
+    - Agent ids are random (10001+), so in round 1 nobody knows the team yet
+      and everyone would pick the same goal: no scans before round 2.
+    - drone_scan costs 2 energy; reaching 0 kills the agent, so it also needs
+      energy_plan() (M2) and more than 2 energy left.
+    The result is visible next round; update_stacks() then reads the full
+    stack and queues the SCAN message.
+    """
+    rnd = state["round"]
+    if rnd < 2:
+        return False
+
+    to_scan = []
+    for loc in get_survs():
+        if loc in state["done_goals"]:
+            continue
+        stack = state["stacks"].get(loc)
+        scanned_at = state["scanned"].get(loc)
+        mine_pending = scanned_at is not None and rnd - scanned_at <= 2
+        if stack is None or not stack["known"] or mine_pending:
+            to_scan.append(loc)
+    to_scan.sort(key=lambda l: (l.x, l.y))
+
+    ids = alive_ids()
+    state["scan_claims"] = {loc: aid for loc, aid in zip(to_scan, ids)}
+
+    me = get_id()
+    target = None
+    for loc, aid in state["scan_claims"].items():
+        if aid == me:
+            target = loc
+            break
+    if target is None:
+        return False
+
+    # already scanned (waiting for my SCAN to spread) or I can see it myself next round
+    scanned_at = state["scanned"].get(target)
+    if scanned_at is not None and rnd - scanned_at <= 4:
+        return False
+    if get_location().is_adjacent_to(target):
+        return False
+
+    trip_goal = follow_assign() or get_location()
+    if get_energy_level() <= 2 or not energy_plan(trip_goal, 2):
+        return False
+
+    drone_scan(target)
+    state["scanned"][target] = rnd
+    log("drone_scan", target)
+    return True
 
 
 # =============================================================================

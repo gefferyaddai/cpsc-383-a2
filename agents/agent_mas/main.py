@@ -69,7 +69,7 @@ state = {
     "map": {},             # Location -> {"cost": int, "killer": bool}
     "region": {},          # Location -> region id (from reachable_from flood fill)
     "chargers": [],        # list of charging Locations
-    "seen_msgs": set(),    # (sender_id, round_num, t) already processed
+    "seen_msgs": set(),    # (sender_id, round_num, raw text) already processed
     "done_goals": set(),   # goal Locations that are finished
     "scan_claims": {},     # Location -> agent id that will drone_scan it
     "paths": {},           # (start, goal) -> (path list, cost) cache
@@ -138,8 +138,67 @@ def send_status():
 
 
 def read_and_merge():
-    """(M1, #6) Read messages, skip duplicates, update state per message type."""
-    pass
+    """(M1, #6) Read messages, skip duplicates, update state per message type.
+
+    read_messages() returns the last 5 rounds of messages every call, so each
+    one is remembered in state['seen_msgs'] and only handled once. The key is
+    (sender_id, round_num, raw text) because one agent can send several SCANs
+    in the same round. Anything that changes the plan sets state['dirty'] so
+    the leader re-runs assign() this round.
+    """
+    for m in read_messages():
+        key = (m.sender_id, m.round_num, m.message)
+        if key in state["seen_msgs"]:
+            continue
+        state["seen_msgs"].add(key)
+
+        try:
+            msg = json.loads(m.message)
+        except ValueError:
+            continue  # not one of our messages, ignore it
+        if not isinstance(msg, dict):
+            continue
+        t = msg.get("t")
+
+        if t == "STATUS":
+            sid = msg["id"]
+            row = state["team"].get(sid)
+            # buffer order is not guaranteed, so never let an older STATUS overwrite a newer one
+            if row is not None and row["last_heard"] > m.round_num:
+                continue
+            if row is None:
+                state["dirty"] = True  # new teammate -> leader should include it
+            state["team"][sid] = {
+                "loc": from_xy(msg["loc"]),
+                "energy": msg["energy"],
+                "goal": from_xy(msg["goal"]),
+                "last_heard": m.round_num,
+                "dead": False,
+            }
+
+        elif t == "SCAN":
+            loc = from_xy(msg["loc"])
+            old = state["stacks"].get(loc)
+            if old is None or not old["known"] or old["layers"] != msg["layers"]:
+                state["dirty"] = True  # revealed or changed layers can change agents needed
+            state["stacks"][loc] = {"layers": msg["layers"], "known": True}
+
+        elif t == "ASSIGN":
+            # newest ASSIGN wins; keys arrive as strings because JSON object keys are strings
+            if m.round_num > state["assign_round"]:
+                state["assign"] = {int(k): from_xy(v) for k, v in msg["a"].items()}
+                state["assign_round"] = m.round_num
+
+        elif t == "DONE":
+            loc = from_xy(msg["loc"])
+            state["done_goals"].add(loc)
+            if loc in state["goals"]:
+                state["goals"][loc]["done"] = True
+            state["dirty"] = True  # freed agents need a new goal
+
+    # messages older than the 5-round buffer can never come back, so forget them
+    oldest = state["round"] - 6
+    state["seen_msgs"] = {k for k in state["seen_msgs"] if k[1] >= oldest}
 
 
 def alive_ids():

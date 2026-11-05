@@ -72,6 +72,7 @@ state = {
     "seen_msgs": set(),    # (sender_id, round_num, raw text) already processed
     "done_goals": set(),   # goal Locations that are finished
     "scan_claims": {},     # Location -> agent id that will drone_scan it
+    "scanned": {},         # Location -> round I drone_scanned it (full stack visible to me next 4 rounds)
     "paths": {},           # (start, goal) -> (path list, cost) cache
     "charging": None,      # charger Location if on a charging detour
     "done_round": -1,      # round I sent DONE (to time out waiting for ASSIGN)
@@ -263,8 +264,60 @@ def am_i_leader():
 
 
 def update_stacks():
-    """(M1, #10) Store full stack per survivor loc when visible, else top layer (known=False)."""
-    pass
+    """(M1, #10) Store full stack per survivor loc when visible, else top layer (known=False).
+
+    get_survs() lists every cell with a survivor anywhere in its stack (buried
+    ones too) and drops a cell once all its survivors are saved (checked in the
+    engine source, game.py get_survs).
+
+    get_cell_info_at() shows every layer only if the cell is adjacent (or my
+    own cell) or drone scanned; otherwise .layers is just [top_layer]. The
+    engine does not say which case we are in, so a stack counts as visible when:
+      - I am on or next to the cell, or
+      - more than one layer came back (only possible when visible), or
+      - I scanned it myself (state['scanned']). A scan made in round r is
+        active from r+1 and lasts 5 ticks, so I trust rounds r+1..r+4.
+    A teammate's scan reaches me as a SCAN message (read_and_merge) instead.
+
+    When I see a full stack that is new or changed, I queue a SCAN so the team
+    shares it, and set state['dirty'] so the leader re-plans.
+    """
+    me = get_location()
+    rnd = state["round"]
+
+    for loc in get_survs():
+        info = get_cell_info_at(loc)
+        layers = [d for d in (layer_to_dict(l) for l in info.layers) if d is not None]
+        old = state["stacks"].get(loc)
+
+        scan_round = state["scanned"].get(loc)
+        scanned = scan_round is not None and scan_round + 1 <= rnd <= scan_round + 4
+        visible = me.is_adjacent_to(loc) or len(layers) > 1 or scanned
+
+        if visible:
+            if old is None or not old["known"] or old["layers"] != layers:
+                state["stacks"][loc] = {"layers": layers, "known": True}
+                state["outbox"].append({"t": "SCAN", "loc": to_xy(loc), "layers": layers})
+                state["dirty"] = True
+            continue
+
+        # only the top layer is visible from here
+        top = layers[:1]
+        if old is not None and old["known"]:
+            if old["layers"][:1] == top:
+                continue  # still matches the full stack we already know
+            # top changed, so layers were removed: drop known layers until the tops line up
+            rest = old["layers"]
+            while rest and rest[:1] != top:
+                rest = rest[1:]
+            if rest:
+                state["stacks"][loc] = {"layers": rest, "known": True}
+            else:
+                state["stacks"][loc] = {"layers": top, "known": False}
+            state["dirty"] = True
+        elif old is None or old["layers"] != top:
+            state["stacks"][loc] = {"layers": top, "known": False}
+            state["dirty"] = True
 
 
 def scan_if_needed():

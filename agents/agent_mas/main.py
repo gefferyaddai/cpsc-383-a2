@@ -202,13 +202,44 @@ def read_and_merge():
 
 
 def alive_ids():
-    """(M1, #7) Ids heard from in the last 2 rounds, plus my own id."""
-    return [get_id()]
+    """(M1, #7) Ids heard from in the last 2 rounds, plus my own id (sorted).
+
+    A STATUS sent in round r is read in round r+1, so a living teammate's
+    newest last_heard is normally round - 1. If it is older than round - 2,
+    the agent has missed 2 STATUS rounds and is treated as dead. The first
+    time an agent is marked dead, state['dirty'] is set so the leader
+    reassigns its goal. A later STATUS (read_and_merge) revives it.
+    """
+    my_id = get_id()
+    alive = [my_id]
+    for aid, row in state["team"].items():
+        if aid == my_id:
+            continue
+        if state["round"] - row["last_heard"] <= 2:
+            alive.append(aid)
+        elif not row["dead"]:
+            row["dead"] = True
+            state["dirty"] = True
+            log("agent", aid, "silent since round", row["last_heard"], "-> dead")
+    return sorted(alive)
 
 
 def team_snapshot():
-    """(M1, #7) List of (id, loc, energy, goal) for living agents (used by assign())."""
-    return []
+    """(M1, #7) List of (id, loc, energy, goal) for living agents, sorted by id
+    (used by assign()).
+
+    My own row is written by send_status(), which runs after the leader plans,
+    so for myself I use the live values instead of last round's row.
+    """
+    my_id = get_id()
+    snap = []
+    for aid in alive_ids():
+        if aid == my_id:
+            snap.append((my_id, get_location(), get_energy_level(), follow_assign()))
+        else:
+            row = state["team"][aid]
+            snap.append((aid, row["loc"], row["energy"], row["goal"]))
+    return snap
 
 
 def am_i_leader():

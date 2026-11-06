@@ -8,7 +8,7 @@ import json
 #
 # Group members:
 #   Geffery Addai     - Tutorial 03
-#   David Oti George  - Tutorial ??
+#   David Oti George  - Tutorial 03
 #   Anant             - Tutorial ??
 #   Morgan Lee        - Tutorial ??
 #
@@ -222,7 +222,8 @@ def alive_ids():
             row["dead"] = True
             state["dirty"] = True
             log("agent", aid, "silent since round", row["last_heard"], "-> dead")
-    return sorted(alive)
+    alive.sort()  # the sandbox has no sorted() builtin
+    return alive
 
 
 def team_snapshot():
@@ -354,7 +355,9 @@ def scan_if_needed():
     to_scan.sort(key=lambda l: (l.x, l.y))
 
     ids = alive_ids()
-    state["scan_claims"] = {loc: aid for loc, aid in zip(to_scan, ids)}
+    # the sandbox has no zip() builtin, so pair goal i with agent i by index
+    pairs = min(len(to_scan), len(ids))
+    state["scan_claims"] = {to_scan[i]: ids[i] for i in range(pairs)}
 
     me = get_id()
     target = None
@@ -386,8 +389,35 @@ def scan_if_needed():
 # MEMBER 2 - David Oti George: map, pathfinding, energy, charging
 # =============================================================================
 def build_map():
-    """(M2, #16) Round 1: cache move_cost + KILLER for every on-map cell, and chargers."""
-    pass
+    """(M2, #16) Round 1: cache move_cost + KILLER for every on-map cell, and chargers.
+
+    The API has no width/height call, so the size is found by walking along
+    each axis from (0, 0) until on_map() is false. Only on-map cells are
+    queried, because get_cell_info_at() raises an error off the map.
+    Cell type and move_cost never change and are visible from anywhere, so
+    reading them once here is enough. Layers do change, so update_stacks()
+    tracks those instead.
+    """
+    width = 0
+    while on_map(Location(width, 0)):
+        width += 1
+    height = 0
+    while on_map(Location(0, height)):
+        height += 1
+
+    killers = 0
+    for x in range(width):
+        for y in range(height):
+            loc = Location(x, y)
+            info = get_cell_info_at(loc)
+            killer = info.is_killer_cell()
+            state["map"][loc] = {"cost": info.move_cost, "killer": killer}
+            if killer:
+                killers += 1
+
+    state["chargers"] = get_charging_cells()
+    log("map", width, "x", height, "cells", len(state["map"]),
+        "killers", killers, "chargers", len(state["chargers"]))
 
 
 def path(a, b):

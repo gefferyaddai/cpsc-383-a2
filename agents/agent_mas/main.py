@@ -420,10 +420,103 @@ def build_map():
         "killers", killers, "chargers", len(state["chargers"]))
 
 
-def path(a, b):
-    """(M2, #17) A*/Dijkstra with heapq, 8 directions, KILLER blocked.
-    Cost = destination cell's move_cost. Returns (list of Locations, cost) or (None, inf)."""
-    return None, float("inf")
+# the 8 directions an agent can step in (CENTER is left out, it isn't a step)
+DIRECTIONS = [
+    Direction.NORTH,
+    Direction.NORTHEAST,
+    Direction.EAST,
+    Direction.SOUTHEAST,
+    Direction.SOUTH,
+    Direction.SOUTHWEST,
+    Direction.WEST,
+    Direction.NORTHWEST,
+]
+
+
+def path(start, goal):
+    """(M2, #17) Cheapest route from start to goal using A*, KILLER cells blocked.
+
+    Returns (list of Locations from start to goal, both included, total cost),
+    or (None, inf) if goal cannot be reached. Entering a cell costs that cell's
+    move_cost, so the start cell is free and path(a, a) is ([a], 0).
+
+    Adapted from David Oti-George's A1 search, based on
+    https://www.redblobgames.com/pathfinding/a-star/introduction.html
+    Changes from A1: cells come from state['map'] instead of get_cell_info_at(),
+    an unreachable goal returns (None, inf), and results are cached.
+
+    The cache in state['paths'] lasts the whole game, which is safe because
+    costs and KILLER cells never change. Callers share the cached list, so
+    they must not modify it.
+    """
+    key = (start, goal)
+    if key in state["paths"]:
+        return state["paths"][key]
+
+    #if the goal is off the map or a killer cell there is no way to reach it
+    goal_cell = state["map"].get(goal)
+    if goal_cell is None or goal_cell["killer"]:
+        state["paths"][key] = (None, float("inf"))
+        return state["paths"][key]
+
+    frontier = []
+    counter = 0  #tie breaker, if 2 locations have the same priority the one added first is popped first
+
+    came_from = {}
+    cost_so_far = {}
+
+    heapq.heappush(frontier, (0, counter, start))
+
+    came_from[start] = None
+    cost_so_far[start] = 0
+
+    while frontier:
+
+        #pop lowest priority
+        current = heapq.heappop(frontier)[2]
+
+        if current == goal:
+            break
+
+        #now for each direction adjacent to the current popped location
+        for direction in DIRECTIONS:
+
+            neighbor = current.add(direction)
+            neighbor_cell = state["map"].get(neighbor)
+
+            if neighbor_cell is None: #if location off map
+                continue
+
+            if neighbor_cell["killer"]: #if that neighbor cell is killer cell don't add to frontier
+                continue
+
+            new_cost = cost_so_far[current] + neighbor_cell["cost"]
+
+            #add it if it has no cost so far, or if this way is cheaper than the existing one
+            if neighbor not in cost_so_far or cost_so_far[neighbor] > new_cost:
+                cost_so_far[neighbor] = new_cost
+                priority = new_cost + heuristic(neighbor, goal)
+                counter += 1
+                heapq.heappush(frontier, (priority, counter, neighbor))
+                came_from[neighbor] = current  #set the came_from of the neighbor to be the current popped location
+
+    #frontier ran out without reaching the goal
+    if goal not in came_from:
+        state["paths"][key] = (None, float("inf"))
+        return state["paths"][key]
+
+    #backtrack from the goal to the start
+    path = []
+    current = goal
+
+    while current is not None:
+        path.append(current)
+        current = came_from[current]
+
+    path.reverse()
+
+    state["paths"][key] = (path, cost_so_far[goal])
+    return state["paths"][key]
 
 
 def path_cost(a, b):
@@ -501,75 +594,15 @@ def on_goal_done(goal):
 
 
 # =============================================================================
-# PATHFINDING FROM ASSIGNMENT 1 (author: Geffery Addai, A1)
-# David adapts this into path() for #17 and cites it there.
+# PATHFINDING FROM ASSIGNMENT 1 (author: David Oti-George, A1)
+# The A* search itself was adapted into path() (#17).
 # =============================================================================
-"""
-function used to find neighbors from the node current location.
-Param: node location
-"""
-def findNeighbors(location):
-    neighbors = {} #dictionary of neighbor locations and cost
-    for d in Direction: # loop through different locations
-        if d == Direction.CENTER: # if location == center then skip / ignore
-            continue
-        candidate = location.add(d) # get the next neighbor candidate by moving 1 space from current location
-        if not on_map(candidate):# if the potential candidate is not map then skip / ignore
-            continue
-        cell = get_cell_info_at(candidate) #get the info potential next place
-
-        if cell.is_killer_cell(): #  if cell is instant kill then skip / ignore
-            continue
-        neighbors[candidate] = cell.move_cost  #store possible location and travel cost
-
-    return neighbors # return neighbor dictionary
-
-
-"""
-function used to guess how many moves are left to the survivor
-Param: current location, location of goal
-"""
-def heuristic(location, goal):
-    # diagonals count as 1 move here, so it's the bigger of the x gap and y gap
-    # (chebyshev distance), and it never overestimates so A* stays optimal
-    return max(abs(location.x - goal.x), abs(location.y - goal.y))
-
-
-"""
-A* search
-"""
-def moddedAStar(start, goal, neighbors, h):
-    # A* pathfinding, based on: https://www.redblobgames.com/pathfinding/a-star/introduction.html
-    unexplored_nodes = {start}        # cells found but not checked yet
-    past_locations = {}               # where agent came from to get to each cell
-    cheapest_cost = {start: 0}        # cheapest energy found so far to reach each cell
-    f = {start: h(start, goal)}       # cost so far + guess of what's left
-
-    while unexplored_nodes:
-        # grab the cell with the lowest f
-        explore_next = min(unexplored_nodes, key=lambda n: f[n])
-
-        # made it to the survivor, so rebuild the path
-        if explore_next == goal:
-            path = [explore_next]
-            while explore_next in past_locations:
-                explore_next = past_locations[explore_next]
-                path.append(explore_next)
-            return path[::-1]         # reverse path array so it goes start -> goal
-
-        unexplored_nodes.remove(explore_next)   # done with this cell
-
-        # look at every potential location agent can step to from here
-        for next_neighbor, step in neighbors(explore_next).items():
-            new_cost = cheapest_cost[explore_next] + step
-            # only keep it if this way is cheaper than any way found before
-            if new_cost < cheapest_cost.get(next_neighbor, float("inf")):
-                past_locations[next_neighbor] = explore_next
-                cheapest_cost[next_neighbor] = new_cost
-                f[next_neighbor] = new_cost + h(next_neighbor, goal)
-                unexplored_nodes.add(next_neighbor)
-
-    return None                       # ran out of cells, no path to the survivor
+#estimate how far the current location is from the goal,
+#since diagonal moves are allowed we use the larger of the x or y distance
+def heuristic(loc: Location, goal: Location) -> int:
+    dx = abs(loc.x - goal.x)
+    dy = abs(loc.y - goal.y)
+    return max(dx, dy)
 
 
 # =============================================================================

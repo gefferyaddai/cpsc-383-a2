@@ -525,18 +525,79 @@ def path_cost(a, b):
 
 
 def next_move(goal):
-    """(M2, #18) Take one step along path(get_location(), goal); wait if no path."""
-    wait()
+    """(M2, #18) Take one step along path(get_location(), goal); wait if no path.
+
+    Always makes exactly one action call. The route starts at my own cell, so
+    the next step is route[1]. A route shorter than 2 means I am already on the
+    goal, and None means it can't be reached, so in both cases I wait (free)
+    instead of risking an error. Calling path() every round is cheap because
+    it is cached.
+    """
+    start = get_location()
+    route = path(start, goal)[0]
+
+    if route is None or len(route) < 2:
+        wait()
+        return
+
+    #take step one of the route and move in that direction
+    move(start.direction_to(route[1]))
 
 
 def reachable_from(loc):
-    """(M2, #19) Flood fill over non-KILLER cells; returns set of reachable Locations."""
-    return set()
+    """(M2, #19) Flood fill over non-KILLER cells; returns set of reachable Locations.
+
+    The set includes loc itself. It is empty if loc is off the map or a KILLER
+    cell. This only looks at KILLER cells, not energy, so a cell can be in the
+    set and still cost more than an agent can pay (path_cost() gives the cost).
+    """
+    start_cell = state["map"].get(loc)
+    if start_cell is None or start_cell["killer"]:
+        return set()
+
+    reached = {loc}
+    frontier = [loc]  #cells whose neighbors still need checking
+
+    while frontier:
+        current = frontier.pop()
+
+        for direction in DIRECTIONS:
+            neighbor = current.add(direction)
+            neighbor_cell = state["map"].get(neighbor)
+
+            if neighbor_cell is None or neighbor_cell["killer"]: #off map or killer cell
+                continue
+
+            if neighbor not in reached:
+                reached.add(neighbor)
+                frontier.append(neighbor)
+
+    return reached
 
 
 def region_id(loc):
-    """(M2, #19) Region label for loc (same id = mutually reachable)."""
-    return 0
+    """(M2, #19) Region label for loc (same id = mutually reachable).
+
+    Returns None if loc is off the map or a KILLER cell, since those belong to
+    no region, so check for None before comparing two labels.
+    Each region is flood filled once and saved in state['region'], which is
+    safe because KILLER cells never change. Ids are only meaningful within one
+    agent, so never send them in a message.
+    """
+    if loc not in state["region"]:
+        reached = reachable_from(loc)
+        if len(reached) == 0:
+            return None
+
+        #the number of labelled cells only grows, so this id is always a new one
+        new_id = len(state["region"])
+        for cell in reached:
+            state["region"][cell] = new_id
+
+    return state["region"][loc]
+
+
+ENERGY_MARGIN = 1  # an agent dies at 0 energy, so it must finish with at least 1
 
 
 def energy_plan(goal, work):
@@ -553,6 +614,17 @@ def charge_detour(goal, work):
 # =============================================================================
 # MEMBER 3 - Anant: goals, agents needed, splitting the team
 # =============================================================================
+# NOTE for Anant (M3), using reachable_from() / region_id() in assign():
+#   - None labels: region_id() returns None for off-map and KILLER cells, so
+#     check for None before comparing. Otherwise two invalid cells would look
+#     like the same region.
+#   - Don't send ids in messages: each agent numbers regions in its own order,
+#     so the numbers can differ between agents.
+#   - Reachable doesn't mean affordable: these functions only treat KILLER cells
+#     as walls. ver3_1 and a_star_giant both have cells costing 500, and agents
+#     start those maps with 500 energy, so a cell can be in the same region and
+#     still be too expensive. assign() should also compare path_cost() with the
+#     agent's energy, or use energy_plan() once it's done.
 def build_goals():
     """(M3, #25) One goal per get_survs() location; drop finished ones."""
     pass

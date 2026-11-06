@@ -597,18 +597,97 @@ def region_id(loc):
     return state["region"][loc]
 
 
+def work_at(goal):
+    """(M2/M4) Energy needed at goal to clear what we know of its stack.
+
+    Each dig() costs that rubble's energy_required, and every digger pays it in
+    full, so 2-agent rubble is not halved. Each save() costs 1. Until the full
+    stack is known only the top layer is stored, so this can be too low, and it
+    shrinks as update_stacks() removes finished layers.
+    """
+    stack = state["stacks"].get(goal)
+    if stack is None:
+        return 0
+
+    work = 0
+    for layer in stack["layers"]:
+        if layer["k"] == "R":
+            work += layer["energy"]
+        else:
+            work += 1  #save() costs 1
+    return work
+
+
 ENERGY_MARGIN = 1  # an agent dies at 0 energy, so it must finish with at least 1
 
 
 def energy_plan(goal, work):
-    """(M2, #20) True if energy covers path cost + work at goal + margin."""
-    return True
+    """(M2, #20) True if energy covers path cost + work at goal + margin.
+
+    work is the energy needed once I arrive (each dig() costs that rubble's
+    energy_required, save() 1, drone_scan() 2). The margin stays small because
+    some maps start agents with only 7 to 14 energy, and a big margin would
+    send them to a charger they don't need. An unreachable goal has infinite
+    cost, so it returns False.
+    """
+    trip_cost = path_cost(get_location(), goal)
+    return get_energy_level() >= trip_cost + work + ENERGY_MARGIN
+
+
+def best_charger(goal):
+    """(M2, #21) Charger with the cheapest trip me -> charger -> goal, or None.
+
+    Only chargers I can reach alive count, so I need more energy than the trip
+    to the charger costs. A charger that can't reach the goal has infinite
+    total cost, so it is never picked.
+    """
+    me = get_location()
+    energy = get_energy_level()
+    best = None
+    best_total = float("inf")
+
+    for charger in state["chargers"]:
+        to_charger = path_cost(me, charger)
+        total = to_charger + path_cost(charger, goal)
+        if energy > to_charger and total < best_total:
+            best = charger
+            best_total = total
+
+    return best
 
 
 def charge_detour(goal, work):
     """(M2, #21) If energy_plan fails: go to best charger and recharge() until the
-    trip fits. Returns True if it used this round's action, else False."""
-    return False
+    trip fits. Returns True if it used this round's action, else False.
+
+    choose_action() only calls this while the plan fails, and clears
+    state['charging'] once it passes, so recharging stops as soon as the rest
+    of the trip fits. The charger is kept in state['charging'] so I don't
+    switch back and forth on the way there, unless it stops being usable.
+
+    With no usable charger: if I can still reach the goal I return False and
+    carry on, since doing part of the work beats doing none. If I can't, I wait
+    (free) instead of walking until I die, so I stay alive and can be reassigned.
+    """
+    me = get_location()
+    charger = state["charging"]
+
+    if (charger is None or get_energy_level() <= path_cost(me, charger)
+            or path_cost(charger, goal) == float("inf")):
+        charger = best_charger(goal)
+        state["charging"] = charger
+
+    if charger is None:
+        if energy_plan(goal, 0):
+            return False
+        wait()
+        return True
+
+    if me == charger:
+        recharge()
+    else:
+        next_move(charger)
+    return True
 
 
 # =============================================================================
@@ -623,8 +702,10 @@ def charge_detour(goal, work):
 #   - Reachable doesn't mean affordable: these functions only treat KILLER cells
 #     as walls. ver3_1 and a_star_giant both have cells costing 500, and agents
 #     start those maps with 500 energy, so a cell can be in the same region and
-#     still be too expensive. assign() should also compare path_cost() with the
-#     agent's energy, or use energy_plan() once it's done.
+#     still be too expensive. Prefer agents that can afford the trip, but don't
+#     rule out an agent just because it can't yet: on the charging maps
+#     (challenge3_x) agents start with less energy than the trip costs, and
+#     charge_detour() gets them there.
 def build_goals():
     """(M3, #25) One goal per get_survs() location; drop finished ones."""
     pass
@@ -697,10 +778,11 @@ def choose_action():
         wait()
         return
 
-    work = 0  # TODO (M2/M4): energy needed at the goal from state['stacks']
-    if not energy_plan(goal, work):
-        if charge_detour(goal, work):
-            return
+    work = work_at(goal)
+    if energy_plan(goal, work):
+        state["charging"] = None  # trip fits now, so any detour is over
+    elif charge_detour(goal, work):
+        return
 
     if get_location() == goal:
         act_at_goal(goal)

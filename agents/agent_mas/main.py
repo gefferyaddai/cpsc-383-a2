@@ -708,12 +708,32 @@ def charge_detour(goal, work):
 #     charge_detour() gets them there.
 def build_goals():
     """(M3, #25) One goal per get_survs() location; drop finished ones."""
+
+
     pass
 
 
 def agents_needed(goal):
     """(M3, #26) Highest agents_required over Rubble layers in the stack (1 or 2)."""
-    return 1
+
+    stack = state["stacks"].get(goal)
+
+    # No stack information is available yet.
+    if stack is None:
+        return 1
+
+    needed = 1
+
+    #check all layers to see if 2 agents are required for the stack 
+
+    for layer in stack["layers"]:
+        if layer["k"] == "R":
+            required = layer["agents"]
+
+            if required > needed:
+                needed = required
+
+    return needed
 
 
 def assign():

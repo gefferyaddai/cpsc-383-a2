@@ -707,10 +707,42 @@ def charge_detour(goal, work):
 #     (challenge3_x) agents start with less energy than the trip costs, and
 #     charge_detour() gets them there.
 def build_goals():
+   
     """(M3, #25) One goal per get_survs() location; drop finished ones."""
 
+    new_goals= {}
 
-    pass
+
+    for loc in get_survs(): #go through all the survivor locations to create a goal for each one 
+            
+
+        if loc in state["done_goals"]:  # if a location finished its goal, skip them
+            continue 
+
+
+        # get known information.
+        
+        stack = state["stacks"].get(loc)
+       
+        full_info = stack is None or not stack["known"] # if information is None or not all layers info known mark it 
+       
+       # create the goal at the survivor location  
+       
+        new_goals[loc] = {
+            
+            "needed": agents_needed(loc), 
+            "full_info": full_info,
+            "done": False 
+            
+            }
+
+    #change in the goals so need to recalcuate     
+    if new_goals != state["goals"]:
+        state["dirty"] = True
+
+    state["goals"] = new_goals
+
+    
 
 
 def agents_needed(goal):

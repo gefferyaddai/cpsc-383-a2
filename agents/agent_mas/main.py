@@ -785,6 +785,8 @@ def assign():
         new_assign[aid] = None
 
 
+    goal_options = []
+
     for goal, details in state["goals"].items(): #iterate through all the goals/ survivors 
 
 
@@ -792,7 +794,7 @@ def assign():
         if details["done"] or goal in state["done_goals"]:    # if the survivor has been recused already skip 
             continue
 
-        agents_needed = details["needed"] # get num of agents needed for the goal 
+        needed = details["needed"] # get num of agents needed for the goal 
 
         goal_region = region_id(goal) 
 
@@ -853,7 +855,7 @@ def assign():
 
 
     # An agent can only have one primary goal.
-    used_agents = []
+    used_agents = set()
 
     for extra, x, y, goal, needed, candidates in goal_options:
 
@@ -880,6 +882,19 @@ def assign():
         for aid in chosen:
             new_assign[aid] = goal
             used_agents.add(aid)
+
+    # Update the leader's local assignment
+    state["assign"] = new_assign
+    state["assign_round"] = state["round"]
+
+    # Broadcast assignments to the other agents
+    state["outbox"].append({
+        "t": "ASSIGN",
+        "a": {
+            str(aid): to_xy(goal)
+            for aid, goal in new_assign.items()
+        }
+    })
 
 
     

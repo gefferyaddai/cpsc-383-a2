@@ -724,7 +724,9 @@ def build_goals():
         
         stack = state["stacks"].get(loc)
        
-        full_info = stack is None or not stack["known"] # if information is None or not all layers info known mark it 
+        tentative = stack is None or not stack["known"] # if information is None or not all layers info known mark it 
+
+        full_info= not tentative 
        
        # create the goal at the survivor location  
        
@@ -771,7 +773,121 @@ def agents_needed(goal):
 def assign():
     """(M3, #27-#31) Leader only: staff every goal at once (cheapest, same region),
     place spares, write state['assign'] and queue an ASSIGN message."""
-    pass
+
+    # Get all living agents and their information.
+    
+    agents = team_snapshot()
+
+    
+    #  Start with every agent unassigned.
+    new_assign = {}
+    for aid, loc, energy, old_goal in agents:
+        new_assign[aid] = None
+
+
+    for goal, details in state["goals"].items(): #iterate through all the goals/ survivors 
+
+
+     
+        if details["done"] or goal in state["done_goals"]:    # if the survivor has been recused already skip 
+            continue
+
+        agents_needed = details["needed"] # get num of agents needed for the goal 
+
+        goal_region = region_id(goal) 
+
+        # Invalid goals cannot be reached.
+        
+        if goal_region is None: 
+            continue
+
+        work = work_at(goal)
+       
+        candidates = []
+
+        for aid, loc, energy, old_goal in agents:  # go through the all agents 
+
+           
+            agent_region = region_id(loc)
+
+            # Agent and goal must be in the same region
+
+            if agent_region is None or agent_region != goal_region:
+                continue
+
+            cost = path_cost(loc, goal) #A* path finding cost 
+
+            if cost == float("inf"): # if the agent cant reach the goal move on to next agent 
+                continue
+
+
+            # check if agent has the energy to fully complete the goal, and give priority to agents who can 
+            if energy >= (cost + work + 1):
+                shortage = 0
+            
+            else:
+                shortage =1 
+        
+
+            candidates.append((shortage, cost, aid))
+
+        
+        # Agents with enough energy come first, then lower cost.
+       
+        candidates.sort()
+
+        # Goals with the fewest agent options considered for assignment first 
+       
+        available_extra = len(candidates) - needed
+
+        goal_options.append((
+            available_extra,  #how many other agents can reach the goal as well 
+            goal.x, # goal x cord 
+            goal.y, # goal y cord 
+            goal,   # the goal itself i.e it location
+            needed, # how many agents are needed 
+            candidates # the candidate agents for the goal 
+        ))
+
+    goal_options.sort() 
+
+
+    # An agent can only have one primary goal.
+    used_agents = []
+
+    for extra, x, y, goal, needed, candidates in goal_options:
+
+        chosen = [] #list of chosen agents (2 for certain goals)
+
+        for shortage, cost, aid in candidates:
+
+            if aid in used_agents: # if an agent already assigned skip it 
+                continue
+
+            chosen.append(aid) 
+
+            if len(chosen) == needed: # we have enough agents for the goal so we exit 
+                break
+
+        # Only staff a goal if enough agents are available.
+
+        if len(chosen) < needed:
+            continue
+
+
+        # set the chosen agents to used agents, with a goal 
+
+        for aid in chosen:
+            new_assign[aid] = goal
+            used_agents.add(aid)
+
+
+    
+
+
+
+
+
 
 
 def follow_assign():

@@ -726,14 +726,14 @@ def build_goals():
        
         tentative = stack is None or not stack["known"] # if information is None or not all layers info known mark it 
 
-        full_info= not tentative 
+        
        
        # create the goal at the survivor location  
        
         new_goals[loc] = {
             
             "needed": agents_needed(loc), 
-            "full_info": full_info,
+            "tentative": tentative,
             "done": False 
             
             }

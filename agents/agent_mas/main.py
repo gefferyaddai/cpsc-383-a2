@@ -9,7 +9,7 @@ import json
 # Group members:
 #   Geffery Addai     - Tutorial 03
 #   David Oti George  - Tutorial 03
-#   Anant             - Tutorial ??
+#   Anant Shonak      - Tutorial 04
 #   Morgan Lee        - Tutorial ??
 #
 # Date: Nov 2026
@@ -907,7 +907,13 @@ def assign():
 
 def follow_assign():
     """(M3, #30) My current goal from the newest ASSIGN (None until one arrives)."""
-    return state["assign"].get(get_id())
+
+    goal = state["assign"].get(get_id())
+
+    return goal
+    
+    
+    
 
 
 # =============================================================================

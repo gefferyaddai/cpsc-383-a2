@@ -41,6 +41,8 @@ import json
 #       {"t": "ASSIGN", "a": {"<agent id>": [x, y] | None}}
 #   DONE    (agent that empties a goal cell)
 #       {"t": "DONE", "loc": [x, y]}
+#   STUCK   (digger whose partner has not arrived for 8 rounds -> leader re-plans)
+#       {"t": "STUCK", "id": int, "loc": [x, y]}
 #
 # ROUND ORDER (every agent, every round):
 #   1. read_messages() and update state
@@ -79,6 +81,7 @@ state = {
     "dirty": True,         # True -> leader should re-plan this round
     "leader": None,        # id of the current leader (for logging hand-overs)
     "outbox": [],          # extra messages (SCAN/DONE/ASSIGN) to send this round
+    "waiting": None,       # (goal Location, round) I started waiting for a dig partner
 }
 
 
@@ -196,6 +199,9 @@ def read_and_merge():
             if loc in state["goals"]:
                 state["goals"][loc]["done"] = True
             state["dirty"] = True  # freed agents need a new goal
+
+        elif t == "STUCK":
+            state["dirty"] = True  # (M4, #36) a digger's partner never showed, re-plan
 
     # messages older than the 5-round buffer can never come back, so forget them
     oldest = state["round"] - 6
@@ -919,20 +925,130 @@ def follow_assign():
 # =============================================================================
 # MEMBER 4 - Morgan Lee: digging, saving, layers, re-planning
 # =============================================================================
+PARTNER_TIMEOUT = 8  # rounds to wait for a dig partner before asking the leader to re-staff
+
+
 def act_at_goal(goal):
-    """(M4, #34) On the goal cell: Survivor -> save (one saver), Rubble -> dig
-    (paired if 2), empty -> on_goal_done(). Must make exactly one action call."""
+    """(M4, #34/#36/#37/#38) On the goal cell: Survivor -> save, Rubble -> dig,
+    no survivors left -> on_goal_done(). Makes exactly one action call.
+
+    The top layer is read fresh every round, never cached (#38): a removed layer
+    only disappears at the end of the round, so next round shows the new top.
+    update_stacks() sees my own cell in full, so it shares any newly revealed
+    layer as a SCAN and marks the plan dirty; nothing to pop by hand here.
+    The goal is finished as soon as get_survs() drops the cell (all survivors
+    saved), even if rubble is left underneath: digging that scores nothing.
+
+    Who acts (#37): crew() is the same sorted id list for everyone on the cell,
+    so the first `need` ids act and the rest wait. That gives one saver per
+    survivor and exactly agents_required diggers per rubble, no messages.
+    """
+    top = get_cell_info_at(goal).top_layer
+    if top is None or goal not in get_survs():
+        on_goal_done(goal)
+        return
+
+    need = 1 if isinstance(top, Survivor) else top.agents_required
+
+    if not dig_ready(goal, need):
+        wait_for_partner(goal)
+        return
+    state["waiting"] = None
+
+    ids = crew(goal)
+    if ids.index(get_id()) >= need:
+        wait()  # spare agent on this cell
+    elif isinstance(top, Survivor):
+        # always worth it: the engine removes queued layers after deaths, so a
+        # save with my last energy point still scores
+        save()
+    elif energy_plan(goal, top.energy_required):
+        dig()
+    else:
+        wait()  # a dig now would kill me; choose_action() sends me charging
+
+
+def crew(goal):
+    """(M4, #35) Sorted ids on my cell that the newest ASSIGN sends to goal (me included).
+
+    My own cell counts as adjacent, so get_cell_info_at() lists its agents.
+    Everyone on the cell reads the same list at the start of the round.
+    """
+    me = get_id()
+    ids = [aid for aid in get_cell_info_at(goal).agents
+           if aid == me or state["assign"].get(aid) == goal]
+    ids.sort()  # the sandbox has no sorted() builtin
+    return ids
+
+
+def dig_ready(goal, need):
+    """(M4, #35) True when enough agents assigned to my goal share my cell.
+
+    dig() only removes rubble if agents_required agents dig in the same round,
+    and each one pays energy_required even when it fails, so never dig short.
+    """
+    return len(crew(goal)) >= need
+
+
+def wait_for_partner(goal):
+    """(M4, #36) Partner not here yet: wait for free instead of a wasted dig.
+
+    After PARTNER_TIMEOUT rounds, tell the leader with a STUCK message so it
+    re-plans (assign() owns the actual re-staffing), then keep waiting.
+    """
+    rnd = state["round"]
+    waiting = state["waiting"]
+    if waiting is None or waiting[0] != goal:
+        state["waiting"] = (goal, rnd)
+    elif rnd - waiting[1] >= PARTNER_TIMEOUT:
+        log("no partner at", goal, "for", PARTNER_TIMEOUT, "rounds -> STUCK")
+        send_message(json.dumps({"t": "STUCK", "id": get_id(), "loc": to_xy(goal)}), [])
+        state["dirty"] = True  # in case I am the leader (I never hear my own messages)
+        state["waiting"] = (goal, rnd)
     wait()
 
 
-def dig_ready():
-    """(M4, #35) True when enough agents assigned to my goal share my cell."""
-    return False
-
-
 def on_goal_done(goal):
-    """(M4, #39) Queue DONE, clear my goal, fall back to nearest goal after 2 rounds."""
-    pass
+    """(M4, #39) Broadcast DONE, clear my goal, and wait for the next ASSIGN.
+
+    Every agent on the cell sends DONE; duplicates are harmless because
+    read_and_merge() just adds the loc to a set. next_goal() takes over if
+    no fresh ASSIGN arrives within 2 rounds.
+    """
+    send_message(json.dumps({"t": "DONE", "loc": to_xy(goal)}), [])
+    state["done_goals"].add(goal)
+    if goal in state["goals"]:
+        state["goals"][goal]["done"] = True
+    state["assign"][get_id()] = None
+    state["done_round"] = state["round"]
+    state["dirty"] = True  # in case I am the leader
+    wait()
+
+
+def next_goal():
+    """(M4, #39) 2 rounds after my DONE with no newer ASSIGN: nearest unfinished goal.
+
+    The pick goes into my own state['assign'] row, so STATUS reports it and
+    the next real ASSIGN from the leader simply overwrites it.
+    """
+    done = state["done_round"]
+    if done < 0 or state["assign_round"] > done or state["round"] - done < 2:
+        return None
+    state["done_round"] = -1
+
+    me = get_location()
+    best = None
+    best_cost = float("inf")
+    for loc, g in state["goals"].items():
+        if g["done"] or loc in state["done_goals"]:
+            continue
+        cost = path_cost(me, loc)
+        if cost < best_cost:
+            best, best_cost = loc, cost
+    if best is not None:
+        log("no ASSIGN after DONE, taking nearest goal", best)
+        state["assign"][get_id()] = best
+    return best
 
 
 # =============================================================================
@@ -961,6 +1077,8 @@ def flush_outbox():
 def choose_action():
     """Step 3: pick and perform exactly one action from my assignment."""
     goal = follow_assign()
+    if goal is None or goal in state["done_goals"]:
+        goal = next_goal()  # (M4, #39) None unless the post-DONE timeout ran out
 
     # no goal yet (or waiting for leader's ASSIGN)
     if goal is None:
